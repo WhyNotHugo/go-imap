@@ -9,7 +9,70 @@ import (
 
 func (c *Conn) handleSelect(tag string, dec *imapwire.Decoder, readOnly bool) error {
 	var mailbox string
-	if !dec.ExpectSP() || !dec.ExpectMailbox(&mailbox) || !dec.ExpectCRLF() {
+	if !dec.ExpectSP() || !dec.ExpectMailbox(&mailbox) {
+		return dec.Err()
+	}
+
+	// Parse optional select parameters (CONDSTORE or QRESYNC)
+	options := imap.SelectOptions{ReadOnly: readOnly}
+	if dec.SP() && dec.Special('(') {
+		var atom string
+		if !dec.ExpectAtom(&atom) {
+			return dec.Err()
+		}
+
+		switch atom {
+		case "CONDSTORE":
+			options.CondStore = true
+			if !dec.ExpectSpecial(')') {
+				return dec.Err()
+			}
+		case "QRESYNC":
+			// Parse QRESYNC parameters: (uidvalidity modseq [known-uids [seqmatch]])
+			if !dec.ExpectSP() || !dec.ExpectSpecial('(') {
+				return dec.Err()
+			}
+
+			var qresync imap.SelectQResyncOptions
+			if !dec.ExpectNumber(&qresync.UIDValidity) || !dec.ExpectSP() || !dec.ExpectModSeq(&qresync.ModSeq) {
+				return dec.Err()
+			}
+
+			// Optional known UIDs
+			if dec.SP() {
+				var knownUIDs imap.UIDSet
+				if !dec.ExpectUIDSet(&knownUIDs) {
+					return dec.Err()
+				}
+				qresync.KnownUIDs = &knownUIDs
+
+				// Optional sequence match data
+				if dec.SP() && dec.Special('(') {
+					var seqMatch imap.SelectSeqMatchData
+					var seqSet, uidSet imap.NumSet
+					if !dec.ExpectNumSet(imapwire.NumKindSeq, &seqSet) || !dec.ExpectSP() || !dec.ExpectNumSet(imapwire.NumKindUID, &uidSet) {
+						return dec.Err()
+					}
+					if !dec.ExpectSpecial(')') {
+						return dec.Err()
+					}
+					seqMatch.KnownSeqSet = seqSet.(imap.SeqSet)
+					seqMatch.KnownUIDSet = uidSet.(imap.UIDSet)
+					qresync.SeqMatchData = &seqMatch
+				}
+			}
+
+			if !dec.ExpectSpecial(')') || !dec.ExpectSpecial(')') {
+				return dec.Err()
+			}
+
+			options.QResync = &qresync
+		default:
+			return newClientBugError("Unknown SELECT parameter")
+		}
+	}
+
+	if !dec.ExpectCRLF() {
 		return dec.Err()
 	}
 
@@ -32,7 +95,6 @@ func (c *Conn) handleSelect(tag string, dec *imapwire.Decoder, readOnly bool) er
 		}
 	}
 
-	options := imap.SelectOptions{ReadOnly: readOnly}
 	data, err := c.session.Select(mailbox, &options)
 	if err != nil {
 		return err

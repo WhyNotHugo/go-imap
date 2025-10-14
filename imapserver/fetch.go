@@ -75,6 +75,39 @@ func (c *Conn) handleFetch(dec *imapwire.Decoder, numKind NumKind) error {
 		}
 	}
 
+	// Parse optional fetch modifiers (CHANGEDSINCE, VANISHED)
+	if dec.SP() && dec.Special('(') {
+		var atom string
+		if !dec.ExpectAtom(&atom) {
+			return dec.Err()
+		}
+
+		if atom == "CHANGEDSINCE" {
+			if !dec.ExpectSP() || !dec.ExpectModSeq(&options.ChangedSince) {
+				return dec.Err()
+			}
+
+			// Optional VANISHED modifier (only valid with CHANGEDSINCE)
+			if dec.SP() {
+				var vanishedAtom string
+				if !dec.ExpectAtom(&vanishedAtom) {
+					return dec.Err()
+				}
+				if vanishedAtom == "VANISHED" {
+					options.Vanished = true
+				} else {
+					return newClientBugError("Unknown FETCH modifier")
+				}
+			}
+		} else {
+			return newClientBugError("Unknown FETCH modifier")
+		}
+
+		if !dec.ExpectSpecial(')') {
+			return dec.Err()
+		}
+	}
+
 	if !dec.ExpectCRLF() {
 		return dec.Err()
 	}
