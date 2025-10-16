@@ -385,6 +385,11 @@ func (c *Client) Mailbox() *SelectedMailbox {
 	return c.mailbox
 }
 
+// Closed returns a channel that is closed when the connection is closed.
+func (c *Client) Closed() <-chan struct{} {
+	return c.decCh
+}
+
 // Close immediately closes the connection.
 func (c *Client) Close() error {
 	c.mutex.Lock()
